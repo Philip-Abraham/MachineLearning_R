@@ -1,0 +1,211 @@
+---
+title: "Human Activity Recognition - Weight Lifting"
+author: "Philip Abraham"
+date: "February 17, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Executive Summary
+The prime objective of the analysis was to build a model to predict the manner in
+which weight lifting exercise was performed.
+
+Six male participants were asked to perform barbell lifts correctly and incorrectly 
+in five different ways. More information is available from the website here: 
+ <http://groupware.les.inf.puc-rio.br/har> (see the section on the Weight Lifting 
+ Exercise Dataset).
+
+Training data retrieved from the accelerometers, on the belt, forearm, arm, and 
+dumbell of the participants, were fed into a Random Forest model that was generated 
+utilizing R program's caret package. 
+
+Five-fold cross validation with five repeats was used to train the Random Forest 
+model on the training dataset.
+The estimated accuracy of the generated Random Forest model on the unseen data was 0.99.
+The prediction model was then tested on a separate test data with twenty 
+observations given, and the model correctly predicted the classes on all of the 
+twenty observations.
+
+## Exploratory Data Analysis
+The training data contains 19622 observations with 159 predictor variables, and one
+outcome variable.
+
+```{r, warning=FALSE, message=FALSE}
+# Load the training data:
+url_csvtr <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"
+download.file(url_csvtr, destfile= "./pml-training.csv")
+dattr = read.csv("./pml-training.csv")
+names(dattr)
+```
+
+The outcome in the dataset is the "classe" variable reflecting five weight lifting 
+specification levels - "A", "B", "C", "D" and "E".
+
+```{r, warning=FALSE, message=FALSE}
+table(dattr$classe)
+```
+
+The primary goal of this exploratory analysis was to reduce (if possible) the 
+number of predictor variables to be used in the model to predict the weight 
+lifting class.
+
+A vast majority of the given predictors contained NA's or blanks in the observations.
+These variables were not fed into the model. Some of the other predictors such as 
+names of subjects, dates, window info etc. were evaluated to discern any effects
+on the outcome variable. Shown below is an even distribution of the classes among the subjects.
+
+```{r, warning=FALSE, message=FALSE}
+table(dattr$user_name)
+```
+
+Similary explorations were conducted for the timestamp, window and date variables to see
+if these variables affected the weight lifting class variable.
+
+```{r, eval=FALSE, warning=FALSE, message=FALSE}
+table(dattr$user_name,dattr$classe)
+table(dattr$raw_timestamp_part_1,dattr$classe)
+table(dattr$raw_timestamp_part_2,dattr$classe)
+table(dattr$num_window,dattr$classe)
+dattime <- data.frame(as.Date(dattr$cvtd_timestamp, "%d/%m/%Y"), dattr$classe)
+plot(dattime$as.Date.dattr.cvtd_timestamp....d..m..Y.., dattime$dattr.classe)
+```
+
+## Data Cleaning
+Based on the data explorations performed above, the subject names, timestamps, 
+windows, or dates did not seem to correlate with the distributions of the "classe" 
+variable, so these variables will not be used in the prediction model. The training
+dataset was cleaned and modified for use in the prediction model.
+
+```{r, warning=FALSE, message=FALSE}
+# Remove non-impact variables from training dataset and data clean-up
+dattr_rev <- subset(dattr, select=-c(1:7,12:36,50:59,69:83,87:101,103:112,125:139,141:150))
+dattr_rev[dattr_rev == ""] <- NA # convert blanks to NA
+dattr_rev<-subset(dattr_rev, complete.cases(dattr_rev)) # Remove NA's
+``` 
+
+The abridged training data set to be used for model building now contains 52
+predictor variables, which has been reduced from originally containing 159 variables.
+
+```{r, warning=FALSE, message=FALSE}
+names(dattr_rev[-53])
+``` 
+
+## Model Training
+The caret package in R program was utilized in an attempt to streamline 
+the process for creating the predictive model.. A Random Forest model was built 
+using caret's "ranger" function, which is a fast implementation of Random Forests, 
+particularly suited for high dimensional data. 
+Random Forest models are less interpretable but are more accurate than regression 
+models. They are easier to tune, and require little preprocessing, capturing 
+threshold effects and variable interactions very well.
+
+The ideal model is the where both the variance and squared bias are low.
+Cross-validation is a way to estimate the test error using training data.
+Repeated five-fold Cross Validation was set up to split the data into five folds 
+and repeated five times. The final model accuracy is taken as the mean from the 
+number of repeats.
+
+```{r, warning=FALSE, message=FALSE}
+# Parallelizing your code.
+# Set up Parallel package for multi-core training
+library(parallel)
+library(doParallel)
+# Calculate the number of cores to use for multi-core training
+no_cores <- detectCores() - 1 # convention to leave 1 core for OS
+# Initiate cluster
+cluster <- makeCluster(no_cores)
+registerDoParallel(cluster)
+``` 
+
+```{r, cache=TRUE, warning=FALSE, message=FALSE}
+# set up training run for x and y syntax, because model format performs poorly
+x <- dattr_rev[,-53]
+y <- dattr_rev[,53]
+
+
+# Create train/test indexes
+library(caret)
+set.seed(42)
+
+# Create Folds
+# Leverage caret to create 25 total folds, but ensure that class distributions
+# matches the overall training data set. This is known as stratified
+# cross validation and generally produces better results.
+mymultiFolds <- createMultiFolds(dattr_rev$classe, k = 5, times = 5)
+
+# Compare class distribution in one of the one of 25 folds
+i3 <- mymultiFolds$Fold3.Rep3
+table(dattr_rev$classe[i3]) / length(i3)
+
+# Summarize the target variable in dattr-rev
+table(dattr_rev$classe) / nrow(dattr_rev)
+
+# Use five-fold cross validation repeated five times for the model
+myControl <- trainControl(
+        method = "repeatedcv", number = 5, repeats = 5,
+        index=mymultiFolds,
+        classProbs = TRUE,
+        verboseIter = FALSE,
+        savePredictions = TRUE,
+        allowParallel = TRUE
+)
+
+## Random Forest on HAR data
+set.seed(42)
+
+# Train Random Forest model
+model_rf <- train(
+  x,y,
+  metric = "Accuracy",
+  method = "ranger",
+  importance='impurity', # extract variable importance in ranger
+  trControl = myControl
+)
+
+
+## De-register parallel processing and Shutdown cluster
+stopCluster(cluster)
+registerDoSEQ()
+``` 
+
+## Prediction Model Perfomance
+Cross validation gives an unbiased estimation of the Random Forest model's performance 
+on unseen data. Model accuracy on the unseen data was calculated to be above 0.99.
+Therefore, the expected out of sample error is less than 0.01.
+
+```{r, warning=FALSE, message=FALSE}
+model_rf
+# Plot Model
+plot(model_rf)
+```
+
+The plot below shows the predictors with the highest impact on the 
+"classe"" variable as determined by this Random Forest Model.
+
+```{r, warning=FALSE, message=FALSE}
+plot(varImp(model_rf))
+``` 
+
+## Prediction on Testing Data and Conclusions
+The generated Random Forest algorithm was applied to the 20 test cases available in 
+given the test data. 
+
+```{r, warning=FALSE, message=FALSE}
+# Load the testing data:
+url_csvts <- "https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"
+download.file(url_csvts, destfile= "./pml-testing.csv")
+datts = read.csv("./pml-testing.csv")
+
+# Prediction on testing data
+predict(model_rf, datts)
+```
+
+A model's accuracy depends on the dataset split (train/test).
+The model correctly predicted all 20 class specifications in the given testing data.
+This leads to the conclusion that the model's cross validation splits hit the
+sweet spot point between underfitting (High Bias) or overfitting (High 
+Variance) the training dataset.
+
